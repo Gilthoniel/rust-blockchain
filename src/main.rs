@@ -11,8 +11,9 @@ use client::Client;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub enum Event {
-    ProposeBlock(Block),
+    ProposeBlock(Block, SocketAddr),
     AckBlock(BlockID),
+    ValidateBlock(BlockID),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -22,7 +23,7 @@ pub enum Message {
 }
 
 fn main() {
-    let n: usize = 4;
+    let n: usize = 3;
     let mut peers = Vec::new();
     let mut srvs = Vec::new();
     for i in 0..n {
@@ -31,11 +32,17 @@ fn main() {
     }
 
     for i in 0..n {
-        srvs.push(Server::new(&peers[i], peers.clone()).unwrap());
+        let srv = Server::new(&peers[i], peers.clone()).unwrap();
+        srv.start();
+        srvs.push(srv);
     }
 
     let cl = Client::new().unwrap();
-    cl.send_to(peers.first().unwrap(), Message::Request(vec![1, 2, 3]));
+    for to in peers {
+        cl.send_to(&to, Message::Request(vec![1, 2, 3]));
+    }
 
-    srvs.into_iter().nth(0).unwrap().wait(|_| true);
+    for srv in srvs {
+        srv.wait(|_| true);
+    }
 }
