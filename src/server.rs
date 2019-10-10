@@ -1,10 +1,14 @@
 use rand::seq::SliceRandom;
+use mio::{net::UdpSocket, Poll, Events, Token, Ready, PollOpt};
 use std::collections::HashMap;
-use std::net::{UdpSocket, SocketAddr};
+use std::net::{SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Duration;
 use std::io;
 use super::{Message, Event, Block, BlockID};
+
+const WAIT_TIMEOUT: Option<Duration> = Some(Duration::from_millis(100));
 
 struct Proposal {
   id: BlockID,
@@ -13,11 +17,13 @@ struct Proposal {
 
 struct Context {
   socket: Arc<UdpSocket>,
+  poll: Poll,
+  events: Mutex<Events>,
   addr: SocketAddr,
   peers: Vec<SocketAddr>,
-  tx: Sender<Block>,
-  queue: HashMap<SocketAddr, Block>,
-  proposal: Option<Proposal>,
+  tx: Mutex<Sender<Block>>,
+  queue: Mutex<HashMap<SocketAddr, Block>>,
+  proposal: Mutex<Option<Proposal>>,
   blocks: Vec<Block>,
 }
 
@@ -26,11 +32,12 @@ impl Context {
     let buf = serde_json::to_vec(&Message::Event(evt.clone())).unwrap();
     let mut rng = rand::thread_rng();
     for addr in self.peers.choose_multiple(&mut rng, 3) {
+      self.poll(Ready::writable());
       self.socket.send_to(&buf, addr).unwrap();
     }
   }
 
-  fn handle_event(&mut self, evt: &Event, src: &SocketAddr) {
+  fn handle_event(&self, evt: &Event, src: &SocketAddr) {
     match evt {
       Event::ProposeBlock(block, proposer) => {
         if !block.verify() {
@@ -38,7 +45,9 @@ impl Context {
           return;
         }
 
-        self.queue.insert(proposer.clone(), block.clone());
+        let mut queue = self.queue.lock().unwrap();
+        queue.insert(proposer.clone(), block.clone());
+        drop(queue);
 
         // Then we send the ack of the block
         let id = block.hash();
@@ -49,12 +58,15 @@ impl Context {
         // Send the ACK to the 
         let ack = Event::AckBlock(id);
         let buf = serde_json::to_vec(&Message::Event(ack)).unwrap();
+
+        self.poll(Ready::writable());
         self.socket.send_to(&buf, &proposer).unwrap();
       },
       Event::AckBlock(id) => {
         println!("Server {:?} got ack for {} from {:?}", self.addr, id, src);
 
-        match self.proposal.as_mut() {
+        let mut proposal = self.proposal.lock().unwrap();
+        match proposal.as_mut() {
           Some(mut p) => {
             if *id != p.id {
               return;
@@ -62,7 +74,7 @@ impl Context {
 
             p.num_ack += 1;
             if p.num_ack == (self.peers.len() as u64) {
-              self.proposal = None;
+              proposal.take();
               self.propagate(&Event::ValidateBlock(id.clone()));
             }
           },
@@ -75,23 +87,28 @@ impl Context {
         let mut rng = block.get_rng();
         let leader = self.peers.choose(&mut rng).unwrap();
 
-        let q = self.queue.get(leader);
+        let mut queue = self.queue.lock().unwrap();
+        let q = queue.get(leader);
         if let Some(block) = q {
           let block = block.clone();
           if block.hash() == *id {
-            self.queue.clear();
+            queue.clear();
 
-            self.tx.send(block.clone()).unwrap();
+            self.tx.lock().unwrap().send(block.clone()).unwrap();
           }
         }
       },
     }
   }
 
-  fn handle_request(&mut self, data: Vec<u8>) {
+  fn handle_request(&self, data: Vec<u8>) {
     let block = self.blocks.last().unwrap().next(data);
-    self.queue.insert(self.addr, block.clone());
-    self.proposal = Some(Proposal{
+    let mut queue = self.queue.lock().unwrap();
+    queue.insert(self.addr, block.clone());
+    drop(queue);
+
+    let mut proposal = self.proposal.lock().unwrap();
+    proposal.replace(Proposal{
       id: block.hash(),
       num_ack: 0,
     });
@@ -101,11 +118,26 @@ impl Context {
     
     self.socket.send_to(&buf, self.peers.last().unwrap()).unwrap();
   }
+
+  fn poll(&self, r: Ready) {
+    let mut events = self.events.lock().unwrap();
+    loop {
+      self.poll.poll(&mut events, WAIT_TIMEOUT).unwrap();
+
+      for event in events.iter() {
+        if event.token() == Token(0) && event.readiness().contains(r) {
+          return;
+        }
+      }
+    }
+  }
 }
 
 pub struct Server {
+  tx_close: Option<Sender<()>>,
+  thread: Option<std::thread::JoinHandle<()>>,
   rx: Receiver<Block>,
-  ctx: Arc<Mutex<Context>>,
+  ctx: Arc<Context>,
 }
 
 impl Server {
@@ -114,44 +146,81 @@ impl Server {
     let addr = addr.clone();
     let (tx, rx) = mpsc::channel();
 
+    let poll = Poll::new().unwrap();
+    poll.register(&socket, Token(0), Ready::writable() | Ready::readable(), PollOpt::edge()).unwrap();
+
     Ok(Server{
+      tx_close: None,
+      thread: None,
       rx,
-      ctx: Arc::new(Mutex::new(Context{
+      ctx: Arc::new(Context{
         socket,
-        tx,
+        events: Mutex::new(Events::with_capacity(128)),
+        poll,
+        tx: Mutex::new(tx),
         addr,
         peers,
-        queue: HashMap::new(),
-        proposal: None,
+        queue: Mutex::new(HashMap::new()),
+        proposal: Mutex::new(None),
         blocks: vec![Block::new(vec![])],
-      })),
+      }),
     })
   }
 
-  pub fn start(&self) {
+  pub fn start(&mut self) {
     let ctx = self.ctx.clone();
 
-    std::thread::spawn(move || {
-      let mut ctx = ctx.lock().unwrap();
+    let (tx, rx_close) = mpsc::channel();
+    self.tx_close = Some(tx);
+
+    self.thread = Some(std::thread::spawn(move || {
       let mut buf = [0; 1024];
       loop {
-        let (size, src) = ctx.socket.recv_from(&mut buf).unwrap();
+        if let Ok(_) = rx_close.try_recv() {
+          return;
+        }
 
-        let msg: Message = serde_json::from_slice(&buf[..size]).unwrap();
+        match ctx.socket.recv_from(&mut buf) {
+          Ok((size, src)) => {
+            let msg: Message = serde_json::from_slice(&buf[..size]).unwrap();
 
-        match msg.clone() {
-          Message::Event(evt) => {
-            ctx.handle_event(&evt, &src);
+            match msg.clone() {
+              Message::Event(evt) => {
+                ctx.handle_event(&evt, &src);
+              },
+              Message::Request(data) => {
+                ctx.handle_request(data);
+              },
+            };
           },
-          Message::Request(data) => {
-            ctx.handle_request(data);
-          },
-        };
+          Err(e) => {
+            if e.kind() != io::ErrorKind::WouldBlock {
+              println!("Error: {:?}", e);
+              return;
+            }
+
+            // WouldBlock error so we need to wait for events
+            ctx.poll(Ready::readable());
+          }
+        }
       }
-    });
+    }));
   }
 
-  pub fn wait(self, f: impl Fn(Block) -> bool) {
+  pub fn stop(self) {
+    // send the close message.
+    if let Some(tx_close) = self.tx_close {
+      tx_close.send(()).unwrap();
+    }
+    
+    if let Some(th) = self.thread {
+      th.join().unwrap();
+    }
+
+    println!("Server {:?} has closed.", self.ctx.addr);
+  }
+
+  pub fn wait(&self, f: impl Fn(Block) -> bool) {
     let mut is_waiting = true;
     while is_waiting {
       let msg = self.rx.recv().unwrap();

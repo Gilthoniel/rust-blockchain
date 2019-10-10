@@ -32,7 +32,7 @@ fn main() {
     }
 
     for i in 0..n {
-        let srv = Server::new(&peers[i], peers.clone()).unwrap();
+        let mut srv = Server::new(&peers[i], peers.clone()).unwrap();
         srv.start();
         srvs.push(srv);
     }
@@ -42,7 +42,11 @@ fn main() {
         cl.send_to(&to, Message::Request(vec![1, 2, 3]));
     }
 
-    for srv in srvs {
+    for srv in &srvs {
         srv.wait(|_| true);
+    }
+
+    for srv in srvs {
+        srv.stop();
     }
 }
