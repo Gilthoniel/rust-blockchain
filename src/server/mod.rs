@@ -2,6 +2,7 @@ mod service;
 mod context;
 
 use mio::Ready;
+use log::{info, error};
 use std::net::{SocketAddr};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -33,6 +34,7 @@ impl Server {
   }
 
   pub fn start(&mut self) {
+    info!("Server {} is starting", self.ctx.get_addr());
     let ctx = self.ctx.clone();
 
     let (tx, rx_close) = mpsc::channel();
@@ -52,19 +54,19 @@ impl Server {
             match msg {
               Message::Event(evt) => {
                 if let Err(e) = ctx.handle_event(&evt, &src) {
-                  println!("Error when processing an event: {:?}", e);
+                  error!("Error when processing an event: {:?}", e);
                 }
               },
               Message::Request(data) => {
                 if let Err(e) = ctx.handle_request(data) {
-                  println!("Error when processing a request: {:?}", e);
+                  error!("Error when processing a request: {:?}", e);
                 }
               },
             };
           },
           Err(e) => {
             if e.kind() != io::ErrorKind::WouldBlock {
-              println!("Error: {:?}", e);
+              error!("Error: {:?}", e);
               return;
             }
 
@@ -86,7 +88,7 @@ impl Server {
       th.join().unwrap();
     }
 
-    println!("Server {:?} has closed.", self.ctx.get_addr());
+    info!("Server {:?} has closed.", self.ctx.get_addr());
   }
 
   pub fn wait(&self, f: impl Fn(Block) -> bool) {

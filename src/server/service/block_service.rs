@@ -1,5 +1,6 @@
 use rand::seq::SliceRandom;
 use mio::Ready;
+use log::{debug, trace};
 use std::io;
 use std::sync::Mutex;
 use std::net::SocketAddr;
@@ -65,7 +66,7 @@ impl BlockService {
       return;
     };
 
-    println!("Server {:?} got ack for {} from {:?}", ctx.get_addr(), id, from);
+    trace!("Server {:?} got ack for {} from {:?}", ctx.get_addr(), id, from);
 
     let mut proposal = self.proposal.lock().unwrap();
     match proposal.as_mut() {
@@ -91,7 +92,7 @@ impl BlockService {
       return;
     };
 
-    println!("Server {:?} got validation for {}", ctx.get_addr(), id);
+    debug!("Server {:?} got validation for {}", ctx.get_addr(), id);
     let block = self.blocks.first().unwrap();
     let mut rng = block.get_rng();
     let leader = ctx.get_peers().choose(&mut rng).unwrap();
