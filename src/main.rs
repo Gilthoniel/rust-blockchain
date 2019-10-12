@@ -51,6 +51,8 @@ fn main() {
     // Wait for a block creation on each server to continue.
     for srv in &srvs {
         srv.wait(|_| true);
+        srv.wait(|_| true);
+        srv.wait(|_| true);
     }
 
     // Stop and clean each server. It waits for thread to close.

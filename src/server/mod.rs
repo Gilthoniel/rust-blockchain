@@ -1,15 +1,15 @@
-mod service;
 mod context;
+mod service;
 
-use mio::Ready;
-use log::{info, error};
-use std::net::{SocketAddr};
-use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::io;
-use super::{Message, Block};
+use super::{Block, Message};
 use context::Context;
+use log::{error, info};
+use mio::Ready;
 use service::block_service::BlockService;
+use std::io;
+use std::net::SocketAddr;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 
 pub struct Server {
   ctx: Arc<Context>,
@@ -25,7 +25,7 @@ impl Server {
     let mut ctx = Context::new(addr.clone(), peers, tx)?;
     ctx.register_event_handler(BlockService::new())?;
 
-    Ok(Server{
+    Ok(Server {
       tx_close: None,
       thread: None,
       rx_wait,
@@ -56,14 +56,14 @@ impl Server {
                 if let Err(e) = ctx.handle_event(&evt, &src) {
                   error!("Error when processing an event: {:?}", e);
                 }
-              },
+              }
               Message::Request(data) => {
                 if let Err(e) = ctx.handle_request(data) {
                   error!("Error when processing a request: {:?}", e);
                 }
-              },
+              }
             };
-          },
+          }
           Err(e) => {
             if e.kind() != io::ErrorKind::WouldBlock {
               error!("Error: {:?}", e);
@@ -83,7 +83,6 @@ impl Server {
     if let Some(tx_close) = self.tx_close {
       tx_close.send(()).unwrap();
     }
-    
     if let Some(th) = self.thread {
       th.join().unwrap();
     }

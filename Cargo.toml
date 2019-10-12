@@ -12,5 +12,5 @@ serde_json = { version = "1.0" }
 ring = "0.16"
 rand = "0.7"
 mio = "0.6"
-log = { version = "0.4", features = ["max_level_info"] }
+log = { version = "0.4", features = ["max_level_debug"] }
 simple_logger = "1.0"

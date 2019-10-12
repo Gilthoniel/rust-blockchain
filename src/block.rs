@@ -48,9 +48,12 @@ impl Block {
   }
 
   pub fn hash(&self) -> BlockID {
-    let d = digest::digest(&digest::SHA256, self.data.as_slice());
-    let mut id: [u8; 32] = Default::default();
-    id[..].clone_from_slice(d.as_ref());
+    let mut c = digest::Context::new(&digest::SHA256);
+    c.update(&self.data);
+    c.update(&self.seed.0);
+
+    let mut id: [u8; digest::SHA256_OUTPUT_LEN] = Default::default();
+    id[..].clone_from_slice(c.finish().as_ref());
 
     BlockID(id)
   }

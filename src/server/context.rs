@@ -1,12 +1,12 @@
-use rand::seq::SliceRandom;
-use mio::{net::UdpSocket, Poll, PollOpt, Events, Ready, Token};
-use std::net::{SocketAddr};
-use std::sync::{Arc, Mutex};
-use std::sync::mpsc::Sender;
-use std::time::Duration;
-use std::io;
-use crate::{Block, Event, Message};
 use super::service::Service;
+use crate::{Block, Event, Message};
+use mio::{net::UdpSocket, Events, Poll, PollOpt, Ready, Token};
+use rand::seq::SliceRandom;
+use std::io;
+use std::net::SocketAddr;
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 const WAIT_TIMEOUT: Option<Duration> = Some(Duration::from_millis(100));
 
@@ -26,7 +26,12 @@ impl Context {
 
     // Socket poll to get readable and writable events from the OS.
     let poll = Poll::new()?;
-    poll.register(&socket, Token(0), Ready::writable() | Ready::readable(), PollOpt::edge())?;
+    poll.register(
+      &socket,
+      Token(0),
+      Ready::writable() | Ready::readable(),
+      PollOpt::edge(),
+    )?;
 
     Ok(Context {
       socket,
