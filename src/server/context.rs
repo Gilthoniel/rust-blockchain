@@ -35,7 +35,7 @@ impl Context {
 
     Ok(Context {
       socket,
-      events: Mutex::new(Events::with_capacity(128)),
+      events: Mutex::new(Events::with_capacity(1024)),
       poll,
       tx: Mutex::new(tx),
       addr,
@@ -92,12 +92,26 @@ impl Context {
     }
   }
 
+  pub fn send(&self, buf: &[u8], addr: &SocketAddr) {
+    loop {
+      match self.socket.send_to(&buf, addr) {
+        Ok(_) => return,
+        Err(e) => {
+          if e.kind() != io::ErrorKind::WouldBlock {
+            return;
+          }
+
+          self.poll(Ready::writable());
+        }
+      }
+    }
+  }
+
   pub fn propagate(&self, evt: &Event) {
     let buf = serde_json::to_vec(&Message::Event(evt.clone())).unwrap();
     let mut rng = rand::thread_rng();
-    for addr in self.peers.choose_multiple(&mut rng, 3) {
-      self.poll(Ready::writable());
-      self.socket.send_to(&buf, addr).unwrap();
+    for addr in self.peers.choose_multiple(&mut rng, 2) {
+      self.send(&buf, addr);
     }
   }
 

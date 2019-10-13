@@ -25,9 +25,16 @@ impl PartialEq for BlockID {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Seed([u8; 32]);
 
+impl PartialEq for &Seed {
+  fn eq(&self, other: &Self) -> bool {
+    self.0 == other.0
+  }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Block {
   seed: Seed,
+  ack: Vec<bool>,
   data: Vec<u8>,
 }
 
@@ -35,12 +42,29 @@ impl Block {
   pub fn new(data: Vec<u8>) -> Self {
     Block {
       seed: Seed(Default::default()), // TODO: random
+      ack: Vec::new(),
       data,
     }
   }
 
+  pub fn get_seed(&self) -> &Seed {
+    &self.seed
+  }
+
   pub fn get_rng(&self) -> StdRng {
     StdRng::from_seed(self.seed.0)
+  }
+
+  pub fn get_ack(&self) -> usize {
+    self.ack.iter().filter(|&v| *v).count()
+  }
+
+  pub fn incr_ack(&mut self, index: usize) {
+    if self.ack.len() < index + 1 {
+      self.ack.resize(index + 1, false);
+    }
+
+    self.ack[index] = true;
   }
 
   pub fn verify(&self) -> bool {
@@ -65,6 +89,7 @@ impl Block {
 
     Block {
       seed: Seed(id),
+      ack: Vec::new(),
       data,
     }
   }

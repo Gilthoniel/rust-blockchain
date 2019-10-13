@@ -25,7 +25,7 @@ pub enum Message {
 fn main() {
     simple_logger::init().unwrap();
 
-    let n: usize = 3;
+    let n: usize = 10;
     let mut peers = Vec::new();
     let mut srvs = Vec::new();
 

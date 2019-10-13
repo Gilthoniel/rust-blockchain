@@ -1,6 +1,5 @@
 use rand::seq::SliceRandom;
-use mio::Ready;
-use log::{debug, trace};
+use log::{info, debug, trace};
 use std::io;
 use std::sync::Mutex;
 use std::net::SocketAddr;
@@ -9,23 +8,18 @@ use super::Service;
 use crate::{Event, Message, Block, BlockID};
 use crate::server::Context;
 
-struct Proposal {
-  id: BlockID,
-  data: Vec<u8>,
-  num_ack: u64,
-}
-
 pub struct BlockService {
+  buffer: Mutex<Vec<u8>>,
   queue: Mutex<HashMap<SocketAddr, Block>>,
-  proposal: Mutex<Option<Proposal>>,
   blocks: Mutex<Vec<Block>>,
 }
 
 impl BlockService {
   pub fn new() -> Self {
     BlockService{
+      buffer: Mutex::new(Vec::new()),
+      // TODO: exclusive to peers.
       queue: Mutex::new(HashMap::new()),
-      proposal: Mutex::new(None),
       blocks: Mutex::new(vec![Block::new(vec![])]),
     }
   }
@@ -36,66 +30,66 @@ impl BlockService {
       return;
     }
 
-    // Verify if we already know this block.
+    // Verify if the block is valid for the next round.
     {
       let blocks = self.blocks.lock().unwrap();
-      for b in blocks.iter() {
-        // TODO: index in block
-        if b.hash() == block.hash() {
-          trace!("Got block already accepted. Aborting gossip.");
-          return;
-        }
+      let last = blocks.last().unwrap();
+      let sim_next = last.next(vec![]);
+      
+      if block.get_seed() != sim_next.get_seed() {
+        trace!("Invalid block index. Aborting gossip.");
+        return;
+      }
+
+      // Add the block in the map of proposed blocks so far
+      // for this round.
+      if proposer != ctx.get_addr() {
+        // ... but not a proposal from the server itself.
+        let mut queue = self.queue.lock().unwrap();
+        queue.insert(proposer.clone(), block.clone());
       }
     }
-
-    // Add the block in the map of proposed blocks so far
-    // for this round.
-    {
-      let mut queue = self.queue.lock().unwrap();
-      queue.insert(proposer.clone(), block.clone());
-    }
-
-    // Then we send the ack of the block.
-    let id = block.hash();
 
     // Propagate the proposal.
     ctx.propagate(&Event::ProposeBlock(block.clone(), proposer.clone()));
 
+    // Then we send the ack of the block.
+    let id = block.hash();
+
     // Send the ACK to the proposer.
-    let ack = Event::AckBlock(id);
+    let ack = Event::AckBlock(id.clone());
     let buf = serde_json::to_vec(&Message::Event(ack)).unwrap();
 
-    ctx.poll(Ready::writable());
-    ctx.get_socket().send_to(&buf, &proposer).unwrap();
+    ctx.send(&buf, &proposer);
   }
 
   fn process_ack_block(&self, ctx: &Context, id: &BlockID, from: &SocketAddr) {
-    trace!("Server {:?} got ack for {} from {:?}", ctx.get_addr(), id, from);
+    trace!("{} got ack for {} from {:?}", ctx.get_addr(), id, from);
 
-    let mut proposal = self.proposal.lock().unwrap();
-    match proposal.as_mut() {
-      Some(mut p) => {
-        if *id != p.id {
-          return;
-        }
+    let mut queue = self.queue.lock().unwrap();
+    let index = ctx.get_peers().iter().position(|p| p == from).unwrap();
 
-        p.num_ack += 1;
-        if p.num_ack == (ctx.get_peers().len() as u64) {
+    if let Some(block) = queue.get_mut(ctx.get_addr()) {
+      ctx.propagate(&Event::ProposeBlock(block.clone(), ctx.get_addr().clone()));
+
+      if block.hash() == *id {
+        block.incr_ack(index);
+
+        trace!("{} Ack for {} with {}: {}", ctx.get_addr(), id, from, block.get_ack());
+        if block.get_ack() == ctx.get_peers().len() {
           ctx.propagate(&Event::ValidateBlock(id.clone()));
         }
       }
-      None => (),
-    };
+    }
   }
 
   fn process_validate_block(&self, ctx: &Context, id: &BlockID) {
-    debug!("Server {:?} got validation for {}", ctx.get_addr(), id);
+    ctx.propagate(&Event::ValidateBlock(id.clone()));
 
     {
       let blocks = self.blocks.lock().unwrap();
       for b in blocks.iter() {
         if b.hash() == *id {
-          trace!("Got a validation for a known block. ABorting gossip.");
           return;
         }
       }
@@ -103,19 +97,24 @@ impl BlockService {
 
     let leader = self.get_leader(ctx.get_peers());
     let mut queue = self.queue.lock().unwrap();
+    let mut blocks = self.blocks.lock().unwrap();
+
+    debug!("{} got validation for {} with leader {}", ctx.get_addr(), id, leader);
 
     if let Some(block) = queue.get(leader) {
       let block = block.clone();
       if block.hash() == *id {
+        info!("{} is announcing block {}", ctx.get_addr(), id);
         ctx.announce_block(&block);
 
         // Clear the current of block proposals from other nodes.
         queue.clear();
 
         // Store the new block.
-        self.blocks.lock().unwrap().push(block.clone());
+        blocks.push(block.clone());
 
         drop(queue);
+        drop(blocks);
         self.retry_block(ctx, id);
       }
     }
@@ -127,41 +126,29 @@ impl BlockService {
     let mut queue = self.queue.lock().unwrap();
     queue.insert(ctx.get_addr().clone(), block.clone());
     drop(queue);
+    drop(blocks);
 
-    let mut proposal = self.proposal.lock().unwrap();
-    proposal.replace(Proposal {
-      id: block.hash(),
-      data: data.clone(),
-      num_ack: 0,
-    });
-
+    trace!("{} asking for block {}", ctx.get_addr(), block.hash());
     let evt = Event::ProposeBlock(block, ctx.get_addr().clone());
-    let buf = serde_json::to_vec(&Message::Event(evt)).unwrap();
 
-    ctx.poll(Ready::writable());
-    ctx
-      .get_socket()
-      .send_to(&buf, ctx.get_peers().last().unwrap())
-      .unwrap();
+    ctx.propagate(&evt);
   }
 
   fn get_leader<'a>(&self, peers: &'a Vec<SocketAddr>) -> &'a SocketAddr {
     let blocks = self.blocks.lock().unwrap();
-    let block = blocks.first().unwrap();
+    let block = blocks.last().unwrap();
     let mut rng = block.get_rng();
 
     return peers.choose(&mut rng).unwrap();
   }
 
-  fn retry_block(&self, ctx: &Context, _: &BlockID) {
-    debug!("Server {} is retrying block.", ctx.get_addr());
+  fn retry_block(&self, ctx: &Context, id: &BlockID) {
+    debug!("{} is retrying block {}", ctx.get_addr(), id);
 
-    let data = {
-      let proposal = self.proposal.lock().unwrap();
-      proposal.as_ref().unwrap().data.clone()
-    };
-
-    self.process_create_block(ctx, &data);
+    let buffer = self.buffer.lock().unwrap();
+    if buffer.len() > 0 {
+      self.process_create_block(ctx, &buffer);
+    }
   }
 }
 
@@ -177,6 +164,9 @@ impl Service for BlockService {
   }
 
   fn process_request(&self, ctx: &Context, data: Vec<u8>) -> io::Result<()> {
+    let mut buffer = self.buffer.lock().unwrap();
+    buffer.extend(&data);
+
     self.process_create_block(ctx, &data);
 
     Ok(())
