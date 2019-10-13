@@ -78,7 +78,7 @@ impl Context {
 
           match msg {
             Message::Event(evt) => {
-              if let Err(e) = self.handle_event(&evt, &src) {
+              if let Err(e) = self.handle_event(evt, &src) {
                 error!("Error when processing an event: {:?}", e);
               }
             }
@@ -93,9 +93,9 @@ impl Context {
     }
   }
 
-  fn handle_event(&self, evt: &Event, from: &SocketAddr) -> io::Result<()> {
+  fn handle_event(&self, evt: Event, from: &SocketAddr) -> io::Result<()> {
     trace!("{} received event {:?}", self.addr, evt);
-    if let Some(h) = &self.event_service {
+    if let Some(ref h) = &self.event_service {
       h.process_event(self, evt, from)?;
     }
 

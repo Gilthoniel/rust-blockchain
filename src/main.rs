@@ -11,9 +11,8 @@ use client::Client;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Event {
-    ProposeBlock(Block, SocketAddr),
-    AckBlock(BlockID),
-    ValidateBlock(BlockID),
+    ProposeBlock(Block),
+    ValidateBlock(Block),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

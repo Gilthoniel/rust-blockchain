@@ -1,6 +1,7 @@
 use ring::digest;
 use rand::prelude::{StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 
 const ID_SHORT_LEN: usize = 4;
 
@@ -35,14 +36,16 @@ impl Eq for Seed {}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Block {
+  leader: SocketAddr,
   seed: Seed,
   ack: Vec<bool>,
   data: Vec<u8>,
 }
 
 impl Block {
-  pub fn new(data: Vec<u8>) -> Self {
+  pub fn new(leader: SocketAddr, data: Vec<u8>) -> Self {
     Block {
+      leader,
       seed: Seed(Default::default()), // TODO: random
       ack: Vec::new(),
       data,
@@ -73,6 +76,14 @@ impl Block {
     return true;
   }
 
+  pub fn has_next(&self, block: &Self) -> bool {
+    self.generate_next_seed() == *block.get_seed()
+  }
+
+  pub fn has_leader(&self, addr: &SocketAddr) -> bool {
+    self.leader == *addr
+  }
+
   pub fn hash(&self) -> BlockID {
     let mut c = digest::Context::new(&digest::SHA256);
     c.update(&self.data);
@@ -84,15 +95,19 @@ impl Block {
     BlockID(id)
   }
 
-  pub fn next(&self, data: Vec<u8>) -> Self {
-    let d = digest::digest(&digest::SHA256, &self.seed.0[..]);
-    let mut id: [u8; digest::SHA256_OUTPUT_LEN] = Default::default();
-    id[..].clone_from_slice(d.as_ref());
-
+  pub fn next(&self, leader: SocketAddr, data: Vec<u8>) -> Self {
     Block {
-      seed: Seed(id),
+      leader,
+      seed: self.generate_next_seed(),
       ack: Vec::new(),
       data,
     }
+  }
+
+  fn generate_next_seed(&self) -> Seed {
+    let d = digest::digest(&digest::SHA256, &self.seed.0[..]);
+    let mut id: [u8; digest::SHA256_OUTPUT_LEN] = Default::default();
+    id[..].clone_from_slice(d.as_ref());
+    Seed(id)
   }
 }
