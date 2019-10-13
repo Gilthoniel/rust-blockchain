@@ -22,14 +22,16 @@ impl PartialEq for BlockID {
   }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Hash)]
 pub struct Seed([u8; 32]);
 
-impl PartialEq for &Seed {
+impl PartialEq for Seed {
   fn eq(&self, other: &Self) -> bool {
     self.0 == other.0
   }
 }
+
+impl Eq for Seed {}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Block {

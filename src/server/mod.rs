@@ -1,10 +1,9 @@
 mod context;
 mod service;
 
-use super::{Block, Message};
+use super::{Block};
 use context::Context;
-use log::{error, info};
-use mio::Ready;
+use log::{info};
 use service::block_service::BlockService;
 use std::io;
 use std::net::SocketAddr;
@@ -41,39 +40,12 @@ impl Server {
     self.tx_close = Some(tx);
 
     self.thread = Some(std::thread::spawn(move || {
-      let mut buf = [0; 1024];
       loop {
         if let Ok(_) = rx_close.try_recv() {
           return;
         }
 
-        match ctx.get_socket().recv_from(&mut buf) {
-          Ok((size, src)) => {
-            let msg: Message = serde_json::from_slice(&buf[..size]).unwrap();
-
-            match msg {
-              Message::Event(evt) => {
-                if let Err(e) = ctx.handle_event(&evt, &src) {
-                  error!("Error when processing an event: {:?}", e);
-                }
-              }
-              Message::Request(data) => {
-                if let Err(e) = ctx.handle_request(data) {
-                  error!("Error when processing a request: {:?}", e);
-                }
-              }
-            };
-          }
-          Err(e) => {
-            if e.kind() != io::ErrorKind::WouldBlock {
-              error!("Error: {:?}", e);
-              return;
-            }
-
-            // WouldBlock error so we need to wait for events
-            ctx.poll(Ready::readable());
-          }
-        }
+        ctx.next();
       }
     }));
   }
@@ -87,7 +59,7 @@ impl Server {
       th.join().unwrap();
     }
 
-    info!("Server {:?} has closed.", self.ctx.get_addr());
+    info!("{} has closed.", self.ctx.get_addr());
   }
 
   pub fn wait(&self, f: impl Fn(Block) -> bool) {

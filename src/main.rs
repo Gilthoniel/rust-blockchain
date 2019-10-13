@@ -9,14 +9,14 @@ use std::net::SocketAddr;
 use server::Server;
 use client::Client;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Event {
     ProposeBlock(Block, SocketAddr),
     AckBlock(BlockID),
     ValidateBlock(BlockID),
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Message {
     Event(Event),
     Request(Vec<u8>),
@@ -25,7 +25,7 @@ pub enum Message {
 fn main() {
     simple_logger::init().unwrap();
 
-    let n: usize = 10;
+    let n: usize = 5;
     let mut peers = Vec::new();
     let mut srvs = Vec::new();
 
